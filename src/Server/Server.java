@@ -1,85 +1,124 @@
-package com.example.gui_caht_0988;
+package Server;
 
-import javafx.fxml.FXML;
-import javafx.scene.control.Button;
-import javafx.scene.control.TextArea;
-import javafx.scene.control.TextField;
-import javafx.scene.layout.HBox;
-
+import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
-import java.io.ObjectInputStream;
+import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.ArrayList;
 
-public class HelloController {
-    Socket socket;
-    @FXML
-    public HBox input_msg_box;
-    @FXML
-    Button snd_btn;
-    @FXML
-    Button cnt_btn;
-    @FXML
-    TextField messageField;
-    @FXML
-    TextArea TA_chat;
-    @FXML
-    TextArea usersOnlineTA;
+public class Server {
+    public static void main(String[] args) {
+        {
+            ArrayList<User> users = new ArrayList<>();
+            try {
+                ServerSocket serverSocket = new ServerSocket(8188); // Создаём серверный сокет
+                System.out.println("Сервер запущен");
+                while (true) { // Бесконечный цикл для ожидания родключения клиентов
+                    Socket socket = serverSocket.accept(); // Ожидаем подключения клиента
+                    System.out.println("Клиент подключился");
+                    User currentUser = new User(socket);
+                    users.add(currentUser);
+                    DataInputStream in = new DataInputStream(currentUser.getSocket().getInputStream()); // Поток ввода
+                    DataOutputStream out = new DataOutputStream(currentUser.getSocket().getOutputStream()); // Поток вывода
+                    Thread thread = new Thread(new Runnable() {
+                        @Override
+                        public void run() {
+                            try {
+                                out.writeUTF("Добро пожаловать на сервер");
+                                out.writeUTF("Введите ваше имя: ");
+                                String userName = in.readUTF(); // Ожидаем имя от клиента
 
-    @FXML
-    private void send() {
-        try {
-            DataOutputStream out = new DataOutputStream(socket.getOutputStream());
-            String text = messageField.getText();
-            out.writeUTF(text);
-            messageField.clear(); // Очищаем поле ввода сообщения
-            messageField.requestFocus(); // Возвращаем фокусировку на поле ввода
-            TA_chat.appendText("Вы: " + text + "\n");
-        } catch (IOException e) {
-            e.printStackTrace();
+                                while (checkFreeName(users, userName)) { // Проверяем, свободно ли имя
+                                    out.writeUTF("Введенное имя: " + userName + " используется другим пользователем.Подумайте ещё...");
+                                    userName = in.readUTF();
+                                }
+                                currentUser.setUserName(userName);
+
+                                for (User user : users) {
+                                    DataOutputStream out = new DataOutputStream(user.getSocket().getOutputStream());
+                                    out.writeUTF(currentUser.getUserName() + " присоединился к беседе");
+                                }
+                                while (true) {
+                                    String request = in.readUTF(); // Ждём сообщение от пользователя
+                                    System.out.println(currentUser.getUserName() + ": " + request);
+                                    if (request.startsWith("/m ")) {
+                                        String replacedRequest = request.replaceFirst("/m ", "");
+                                        sendPrivateMessage(replacedRequest, users, currentUser);
+                                    } else {
+                                        sendPublicMessage(request, users, currentUser);
+                                    }
+                                }
+                            } catch (IOException e) {
+                                userExit(users, currentUser);
+                            }
+                        }
+                    });
+                    thread.start();
+                }
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
         }
     }
 
-    @FXML
-    private void connect() {
-        try {
-            socket = new Socket("localhost", 8188);
-            ObjectInputStream ois = new ObjectInputStream(socket.getInputStream());
-            Thread thread = new Thread(new Runnable() {
-                @Override
-                public void run() {
-                    while (true) {
-                        String response = "";
-                        ArrayList<String> usersName = new ArrayList<String>();
-                        try {
-                            Object object = ois.readObject();
-                            if (object.getClass().equals(usersName.getClass())) {
-                                usersName = ((ArrayList<String>) object);
-                                System.out.println(usersName);
-                                usersOnlineTA.clear(); // Очищает TextArea
-                                for (String userName : usersName) {
-                                    usersOnlineTA.appendText(userName + "\n");
-                                }
-                            } else if (object.getClass().equals(response.getClass())) {
-                                response = object.toString();
-                                TA_chat.appendText(response + "\n");
-                            } else {
-                                TA_chat.appendText("Произошла ошибка");
-                            }
-                            cnt_btn.setVisible(false);
-                            input_msg_box.setDisable(false);
-                        } catch (Exception e) {
-                            e.printStackTrace();
-                            cnt_btn.setVisible(true);
-                            input_msg_box.setDisable(true);
-                        }
-                    }
-                }
-            });
-            thread.start();
-        } catch (IOException e) {
-            e.printStackTrace();
+    private static void sendPublicMessage(String request, ArrayList<User> users, User currentUser) throws IOException {
+        for (User user : users) {
+            if (users.indexOf(user) == users.indexOf(currentUser)) continue;
+            DataOutputStream out = new DataOutputStream(user.getSocket().getOutputStream());
+            out.writeUTF(currentUser.getUserName() + ": " + request);
         }
+    }
+
+    private static void sendPrivateMessage(String request, ArrayList<User> users, User currentUser) throws IOException {
+        User recipient = null;
+        String[] splitted = request.split(" ", 2);
+        String name = "";
+        String message = "";
+        DataOutputStream out = new DataOutputStream(currentUser.getSocket().getOutputStream());
+        try {
+            name = splitted[0];
+            message = splitted[1];
+        } catch (IndexOutOfBoundsException ex) {
+            out.writeUTF("Некорректное сообщение");
+        }
+
+        for (User user : users) {
+            if (user.getUserName().equals(name)) {
+                recipient = user;
+                break;
+            }
+        }
+        if (recipient != null) {
+            DataOutputStream recipientOut = new DataOutputStream(recipient.getSocket().getOutputStream());
+            recipientOut.writeUTF(currentUser.getUserName() + ": " + message);
+        } else {
+            out.writeUTF("Пользователь с данным именем: " + name + " не найден");
+        }
+
+
+    }
+
+
+    private static void userExit(ArrayList<User> users, User currentUser) {
+        users.remove(currentUser);
+        for (User user : users) {
+            try {
+                DataOutputStream out = new DataOutputStream(user.getSocket().getOutputStream());
+                out.writeUTF(currentUser.getUserName() + " покинул чат");
+            } catch (IOException ioException) {
+                ioException.printStackTrace();
+            }
+        }
+    }
+
+    public static boolean checkFreeName(ArrayList<User> users, String name) {
+        for (User user : users
+        ) {
+            if (user.getUserName() != null && user.getUserName().equals(name)) {
+                return true;
+            }
+        }
+        return false;
     }
 }
